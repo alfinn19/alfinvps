@@ -1,0 +1,75 @@
+name: RDP_TIPSUNIX_GPU
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */5 * * *'
+
+jobs:
+  secure-rdp:
+    # Catatan: Windows-latest standar tidak punya Dedicated GPU (Nvidia/AMD).
+    # Jika Anda punya runner sendiri dengan GPU, ganti jadi: [self-hosted, windows, gpu]
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Configure Core RDP Settings
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
+          Restart-Service -Name TermService -Force
+
+      - name: Create RDP User (Bypass Policy)
+        run: |
+          $username = "alfin"
+          $password = "alpinzxz19"
+          
+          # Hapus user lama jika ada
+          if (Get-LocalUser -Name $username -ErrorAction SilentlyContinue) { Remove-LocalUser -Name $username }
+          
+          # Gunakan NET USER agar password simpel 'alpinzxz19' tidak ditolak
+          net user $username $password /add /y
+          net localgroup Administrators $username /add
+          net localgroup "Remote Desktop Users" $username /add
+          
+          # Set agar password tidak expire
+          wmic useraccount where name='$username' set passwordexpires=false
+          
+          echo "RDP_PASS=$password" >> $env:GITHUB_ENV
+          echo "RDP_USER=$username" >> $env:GITHUB_ENV
+
+      - name: Install Tailscale
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+
+      - name: Establish Tailscale Connection
+        run: |
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=vps-alpin --accept-routes
+          $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+      - name: Check GPU Status
+        run: |
+          Write-Host "Mengecek Hardware GPU..."
+          Get-CimInstance Win32_VideoController | Select-Object Name, AdapterRAM, DriverVersion | Format-Table
+          # Mengaktifkan akselerasi hardware untuk RDP
+          reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" /v fEnableRemoteFXHardwareCursor /t REG_DWORD /d 1 /f
+
+      - name: Maintain Connection
+        run: |
+          Write-Host "`n=============================="
+          Write-Host "RDP SIAP! USER: $env:RDP_USER"
+          Write-Host "IP Address : $env:TAILSCALE_IP"
+          Write-Host "==============================`n"
+          
+          $totalSeconds = 350 * 60
+          $elapsed = 0
+          while ($elapsed -lt $totalSeconds) {
+              Write-Host "[$(Get-Date)] RDP Aktif..."
+              Start-Sleep -Seconds 60
+              $elapsed += 60
+          }
