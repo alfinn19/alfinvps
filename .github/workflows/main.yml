@@ -21,14 +21,25 @@ jobs:
 
       - name: Create RDP User
         run: |
+          # 1. Matikan kebijakan kompleksitas password agar bisa pakai password simpel
+          secedit /export /cfg config.inf
+          (Get-Content config.inf) -replace "PasswordComplexity = 1", "PasswordComplexity = 0" | Set-Content config.inf
+          secedit /configure /db $env:windir\security\local.sdb /cfg config.inf /areas SECURITYPOLICY
+          
           $password = "alpinzxz19"
+          $username = "alfin"
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          # Hapus user lama jika ada, lalu buat baru
+          
+          # 2. Hapus user lama jika ada (RDP atau alfin), lalu buat baru 'alfin'
           if (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue) { Remove-LocalUser -Name "RDP" }
-          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+          if (Get-LocalUser -Name $username -ErrorAction SilentlyContinue) { Remove-LocalUser -Name $username }
+          
+          New-LocalUser -Name $username -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member $username
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
+          
           echo "RDP_PASS=$password" >> $env:GITHUB_ENV
+          echo "RDP_USER=$username" >> $env:GITHUB_ENV
 
       - name: Install Tailscale
         run: |
@@ -50,11 +61,10 @@ jobs:
           Write-Host "`n=============================="
           Write-Host "RDP SIAP DIGUNAKAN!"
           Write-Host "IP Address : $env:TAILSCALE_IP"
-          Write-Host "Username   : RDP"
+          Write-Host "Username   : $env:RDP_USER"
           Write-Host "Password   : $env:RDP_PASS"
           Write-Host "==============================`n"
           
-          # Loop selama 5 jam 50 menit supaya tidak kena kill mendadak oleh GitHub
           $totalSeconds = 350 * 60
           $elapsed = 0
           while ($elapsed -lt $totalSeconds) {
